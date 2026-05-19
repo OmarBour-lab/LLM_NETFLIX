@@ -1,0 +1,38 @@
+# Local environment
+.venv/
+venv/
+env/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+
+# Generated vector database
+chroma_db/
+
+# Streamlit and runtime logs
+.streamlit/
+streamlit-*.log
+*.log
+
+# Project instructions / local notes not needed in the repo
+AGENTS.md
+commades utile.txt
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

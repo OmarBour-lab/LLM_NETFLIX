@@ -1,0 +1,179 @@
+Fonctionnement du projet Netflix RAG Chatbot
+===========================================
+
+1. Objectif
+-----------
+Ce projet construit un chatbot local capable de répondre à des questions sur le
+catalogue Netflix contenu dans le fichier data/netflix_titles.csv.
+
+Le projet utilise une architecture RAG, c'est-à-dire Retrieval-Augmented
+Generation. Le modèle ne connaît pas directement toute la base Netflix. Il reçoit
+seulement les documents les plus pertinents récupérés depuis une base vectorielle
+locale.
+
+
+2. Technologies utilisées
+-------------------------
+- Python avec un environnement uv
+- LangChain pour organiser la chaîne RAG
+- Ollama comme fournisseur local de modèles
+- llama3.2:1b comme modèle de langage
+- nomic-embed-text comme modèle d'embeddings
+- ChromaDB comme base vectorielle persistante
+- Streamlit pour l'interface web
+- pandas pour lire le fichier CSV
+
+
+3. Données
+----------
+Le dataset utilisé est :
+
+data/netflix_titles.csv
+
+Ce fichier contient 8 807 titres Netflix. Il ne doit jamais être modifié.
+
+Chaque ligne du CSV correspond à un film ou une série TV avec des champs comme :
+title, type, director, cast, country, release_year, rating, duration, listed_in,
+description.
+
+
+4. Ingestion des données
+------------------------
+Le fichier src/ingest.py sert à préparer la base ChromaDB.
+
+Son rôle :
+1. Vérifier que data/netflix_titles.csv existe.
+2. Lire le CSV avec pandas.
+3. Remplacer les valeurs manquantes uniquement dans les colonnes :
+   director, cast, country, date_added.
+4. Construire un document texte par titre Netflix.
+5. Générer les embeddings avec nomic-embed-text via Ollama.
+6. Stocker les documents dans ChromaDB dans le dossier chroma_db/.
+
+La collection ChromaDB utilisée s'appelle :
+
+netflix_catalog
+
+Le script vérifie aussi si la collection contient déjà des documents. Si oui,
+il arrête l'ingestion pour éviter les doublons.
+
+
+5. Recherche des documents
+--------------------------
+Le fichier src/retriever.py contient la logique de récupération.
+
+Il utilise deux approches :
+
+1. Recherche vectorielle classique
+   La question est transformée en embedding, puis ChromaDB récupère les documents
+   les plus proches.
+
+2. Filtres structurés
+   Pour certaines questions, une recherche exacte est plus fiable que la recherche
+   vectorielle. Le projet filtre donc directement les documents selon leurs champs.
+
+Exemples :
+- titres contenant un mot : "list movies containing love"
+- titres qui commencent par une phrase : "all titles that start with the legend of"
+- réalisateur contenant un mot : "movies with director containing John"
+- acteur contenant un mot : "movies with cast containing Sandra"
+- année de sortie : "movies released in 2020"
+- pays : "series from Japan released in 2020"
+- type : Movie ou TV Show
+
+Cette partie est importante, car le modèle llama3.2:1b est léger et peut oublier
+des éléments dans les longues listes. Les questions de liste sont donc extraites
+directement depuis les documents filtrés.
+
+
+6. Chaîne RAG
+-------------
+Le fichier src/chain.py contient la chaîne principale de question-réponse.
+
+Son rôle :
+1. Recevoir une question utilisateur.
+2. Appeler le retriever pour récupérer les documents utiles.
+3. Formater le contexte récupéré.
+4. Envoyer le contexte au modèle llama3.2:1b via Ollama.
+5. Retourner la réponse finale.
+
+Pour les questions de description ou de résumé, le modèle local génère la réponse
+à partir du contexte récupéré.
+
+Pour les questions de liste, la réponse est extraite directement à partir des
+documents filtrés, afin d'éviter que le petit modèle oublie des titres.
+
+
+7. Interface CLI
+----------------
+Le fichier src/app.py fournit une interface en ligne de commande.
+
+Commande :
+
+uv run python src/app.py
+
+L'utilisateur peut poser une question, puis quitter avec :
+
+/quit
+
+L'interface gère aussi quelques erreurs simples :
+- ChromaDB manquante
+- Ollama non lancé
+- modèles Ollama non téléchargés
+
+
+8. Interface web
+----------------
+Le fichier src/web_app.py fournit une interface Streamlit.
+
+Commande :
+
+uv run streamlit run src/web_app.py
+
+L'interface web est en anglais, car le modèle llama3.2:1b répond mieux aux
+questions en anglais.
+
+Elle propose des exemples de questions pour montrer les capacités du projet :
+- Give me the description of League of Legends Origins
+- all pokemon movies or series that are available
+- all titles that start with the legend of
+- movies with director containing John
+- movies with cast containing Sandra
+- movies released in 2020
+- series from Japan released in 2020
+- list movies containing love
+
+
+9. Commandes principales
+------------------------
+Installer les dépendances :
+
+uv pip install -r requirements.txt
+
+Télécharger les modèles Ollama :
+
+ollama pull llama3.2:1b
+ollama pull nomic-embed-text
+
+Créer la base vectorielle :
+
+uv run python src/ingest.py
+
+Lancer le chatbot CLI :
+
+uv run python src/app.py
+
+Lancer l'interface web :
+
+uv run streamlit run src/web_app.py
+
+
+10. Limites connues
+-------------------
+- Le modèle llama3.2:1b est léger. Il peut parfois mal raisonner ou oublier des
+  éléments dans une longue liste.
+- Pour cette raison, les listes sont filtrées côté Python à partir de la base.
+- Le modèle n'est pas entraîné sur le CSV. Il lit seulement le contexte récupéré.
+- La qualité dépend de la récupération des bons documents.
+- Le projet reste entièrement local : aucune API externe n'est utilisée.
+
