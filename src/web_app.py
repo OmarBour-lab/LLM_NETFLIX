@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import altair as alt
+import pandas as pd
 import streamlit as st
 
 try:
@@ -5,10 +9,11 @@ try:
     from .chain import ask_netflix
 except ImportError:
     from app import chroma_db_is_missing, explain_error
-from chain import ask_netflix
+    from chain import ask_netflix
 
 
 MEMORY_MESSAGES = 6
+DATASET_PATH = Path("data/netflix_titles.csv")
 
 
 APP_TITLE = "Netflix RAG Chatbot"
@@ -16,40 +21,39 @@ APP_SUBTITLE = (
     "Ask questions against the local Netflix catalog. "
     "The app can retrieve titles, filter fields, and summarize records with a local LLM."
 )
-EXAMPLE_GROUPS = [
-    (
-        "Title search",
-        [
-            "Give me the description of League of Legends Origins",
-            "What do you know about Fate/Zero?",
-            "Who directed Bird Box?",
-        ],
-    ),
-    (
-        "List titles",
-        [
-            "give me all the nova movies available",
-            "all pokemon movies or series that are available",
-            "all titles that start with the legend of",
-        ],
-    ),
-    (
-        "Filter fields",
-        [
-            "movies with director containing John",
-            "movies with cast containing Sandra",
-            "series from Japan released in 2020",
-        ],
-    ),
-    (
-        "Catalog filters",
-        [
-            "movies released in 2020",
-            "all titles with christmas",
-            "list movies containing love",
-        ],
-    ),
+EXAMPLE_OPTIONS = [
+    "Give me the description of League of Legends Origins",
+    "Who directed Bird Box?",
+    "give me all the nova movies available",
+    "all titles that start with the legend of",
+    "movies with director containing John",
+    "movies released in 2020",
 ]
+
+
+def default_messages() -> list[dict[str, str]]:
+    return [
+        {
+            "role": "assistant",
+            "content": (
+                "Hi. Ask me in English about the local Netflix catalog. "
+                "Try title descriptions, title lists, director/cast filters, countries, years, or genres."
+            ),
+        }
+    ]
+
+
+def start_new_chat() -> None:
+    st.session_state.messages = default_messages()
+    st.session_state.pending_question = None
+    st.session_state.page = "Chat"
+    st.session_state.page_selector = "Chat"
+
+
+def queue_example_question() -> None:
+    st.session_state.pending_question = st.session_state.example_question
+    st.session_state.page = "Chat"
+    st.session_state.page_selector = "Chat"
 
 
 def setup_page() -> None:
@@ -162,7 +166,6 @@ def inject_styles() -> None:
             }
 
             div.stButton > button {
-                width: 100%;
                 border: 1px solid rgba(229, 9, 20, 0.42);
                 background: rgba(229, 9, 20, 0.12);
                 color: #fff;
@@ -181,6 +184,11 @@ def inject_styles() -> None:
                 color: var(--muted);
                 font-size: 0.88rem;
                 line-height: 1.55;
+            }
+
+            .section-title {
+                margin-top: 1.5rem;
+                margin-bottom: 0.5rem;
             }
 
             @media (max-width: 760px) {
@@ -203,23 +211,55 @@ def inject_styles() -> None:
     )
 
 
+@st.cache_data(show_spinner=False)
+def load_catalog() -> pd.DataFrame:
+    df = pd.read_csv(DATASET_PATH)
+    cols_with_nan = ["director", "cast", "country", "date_added"]
+    df[cols_with_nan] = df[cols_with_nan].fillna("Inconnu")
+    return df
+
+
+def split_and_count(df: pd.DataFrame, column: str, top_n: int = 10) -> pd.DataFrame:
+    values = (
+        df[column]
+        .dropna()
+        .astype(str)
+        .str.split(",")
+        .explode()
+        .str.strip()
+    )
+    values = values[values != ""]
+    values = values[values != "Inconnu"]
+    counts = values.value_counts().head(top_n).reset_index()
+    counts.columns = [column, "count"]
+    return counts
+
+
 def init_state() -> None:
     if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": (
-                    "Hi. Ask me in English about the local Netflix catalog. "
-                    "Try title descriptions, title lists, director/cast filters, countries, years, or genres."
-                ),
-            }
-        ]
+        st.session_state.messages = default_messages()
     if "pending_question" not in st.session_state:
         st.session_state.pending_question = None
+    if "page" not in st.session_state:
+        st.session_state.page = "Chat"
+    if "page_selector" not in st.session_state:
+        st.session_state.page_selector = st.session_state.page
+    if "example_question" not in st.session_state:
+        st.session_state.example_question = EXAMPLE_OPTIONS[0]
 
 
 def render_sidebar() -> None:
     with st.sidebar:
+        st.markdown("## Navigation")
+        st.radio(
+            "Choose a page",
+            ["Chat", "Dataset Overview"],
+            key="page_selector",
+            label_visibility="collapsed",
+        )
+        st.session_state.page = st.session_state.page_selector
+        st.divider()
+
         st.markdown("## Runtime")
         db_status = "Ready" if not chroma_db_is_missing() else "Needs ingest"
         st.markdown(
@@ -242,10 +282,7 @@ def render_sidebar() -> None:
             unsafe_allow_html=True,
         )
         st.divider()
-        if st.button("New chat", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.pending_question = None
-            st.rerun()
+        st.button("New chat", use_container_width=True, on_click=start_new_chat)
         st.markdown(
             """
             <div class="small-note">
@@ -274,26 +311,124 @@ def render_header() -> None:
     )
 
 
-def render_examples() -> None:
-    st.markdown("### Try What It Can Do")
+def render_metric_cards(df: pd.DataFrame) -> None:
+    total_titles = len(df)
+    movie_count = int((df["type"] == "Movie").sum())
+    show_count = int((df["type"] == "TV Show").sum())
+    min_year = int(df["release_year"].min())
+    max_year = int(df["release_year"].max())
+    country_count = split_and_count(df, "country", top_n=10000)["country"].nunique()
+    genre_count = split_and_count(df, "listed_in", top_n=10000)["listed_in"].nunique()
+
+    columns = st.columns(4)
+    columns[0].metric("Total titles", f"{total_titles:,}")
+    columns[1].metric("Movies", f"{movie_count:,}")
+    columns[2].metric("TV shows", f"{show_count:,}")
+    columns[3].metric("Years covered", f"{min_year}-{max_year}")
+
+    columns = st.columns(2)
+    columns[0].metric("Countries represented", f"{country_count:,}")
+    columns[1].metric("Genres/categories", f"{genre_count:,}")
+
+
+def render_dataset_overview() -> None:
+    st.markdown("### Dataset Overview")
     st.markdown(
         """
         <div class="small-note">
-            Use English questions for best results with <strong>llama3.2:1b</strong>.
-            List-style questions are filtered directly against the catalog; description questions use the retrieved context and the local LLM.
+            These charts are generated directly from <code>data/netflix_titles.csv</code>.
+            The CSV is read only and never modified.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    for group_title, questions in EXAMPLE_GROUPS:
-        st.markdown(f"#### {group_title}")
-        columns = st.columns(3)
-        for column, question in zip(columns, questions):
-            with column:
-                if st.button(question, key=f"example-{group_title}-{question}"):
-                    st.session_state.pending_question = question
-                    st.rerun()
+    try:
+        df = load_catalog()
+    except Exception as error:
+        st.error(f"Unable to load dataset: {error}")
+        return
+
+    render_metric_cards(df)
+
+    st.markdown("#### Movies vs TV Shows")
+    type_counts = df["type"].value_counts().rename_axis("type").reset_index(name="count")
+    st.bar_chart(type_counts, x="type", y="count", color="#e50914")
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Titles by Release Year")
+        year_counts = (
+            df.groupby("release_year")
+            .size()
+            .reset_index(name="count")
+            .sort_values("release_year")
+        )
+        min_year = int(year_counts["release_year"].min())
+        max_year = int(year_counts["release_year"].max())
+        year_chart = (
+            alt.Chart(year_counts)
+            .mark_line(color="#e50914", strokeWidth=3)
+            .encode(
+                x=alt.X(
+                    "release_year:Q",
+                    title="Release year",
+                    scale=alt.Scale(domain=[min_year, max_year], zero=False),
+                ),
+                y=alt.Y("count:Q", title="Titles"),
+                tooltip=["release_year", "count"],
+            )
+            .properties(height=320)
+        )
+        st.altair_chart(year_chart, use_container_width=True)
+
+    with right:
+        st.markdown("#### Top Ratings")
+        rating_counts = df["rating"].value_counts().head(10).rename_axis("rating").reset_index(name="count")
+        st.bar_chart(rating_counts, x="rating", y="count", color="#f97316")
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Top Countries")
+        country_counts = split_and_count(df, "country", top_n=10)
+        st.bar_chart(country_counts, x="country", y="count", color="#38bdf8")
+        st.dataframe(country_counts, use_container_width=True, hide_index=True)
+
+    with right:
+        st.markdown("#### Top Genres")
+        genre_counts = split_and_count(df, "listed_in", top_n=10)
+        st.bar_chart(genre_counts, x="listed_in", y="count", color="#22c55e")
+        st.dataframe(genre_counts, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Sample Catalog Rows")
+    st.dataframe(
+        df[["title", "type", "release_year", "director", "country", "listed_in"]].head(25),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_examples() -> None:
+    st.markdown("### Try an Example")
+    st.markdown(
+        """
+        <div class="small-note">
+            Pick one compact example, or type your own question below.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([4, 1])
+    with left:
+        st.selectbox(
+            "Example question",
+            EXAMPLE_OPTIONS,
+            key="example_question",
+            label_visibility="collapsed",
+        )
+    with right:
+        st.button("Try example", use_container_width=True, on_click=queue_example_question)
 
 
 def render_messages() -> None:
@@ -325,18 +460,22 @@ def main() -> None:
     init_state()
     render_sidebar()
     render_header()
-    render_examples()
-    render_messages()
 
-    question = st.session_state.pending_question
-    st.session_state.pending_question = None
+    if st.session_state.page == "Chat":
+        render_examples()
+        render_messages()
+    else:
+        render_dataset_overview()
 
-    chat_question = st.chat_input("Ask about titles, directors, cast, countries, years, or genres...")
-    if chat_question:
-        question = chat_question
+    if st.session_state.page == "Chat":
+        question = st.session_state.pending_question
+        st.session_state.pending_question = None
+        chat_question = st.chat_input("Ask about titles, directors, cast, countries, years, or genres...")
+        if chat_question:
+            question = chat_question
 
-    if question:
-        answer_question(question.strip())
+        if question:
+            answer_question(question.strip())
 
 
 if __name__ == "__main__":
