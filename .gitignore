@@ -30,6 +30,7 @@ streamlit-*.log
 # Project instructions / local notes not needed in the repo
 AGENTS.md
 commades utile.txt
+review.txt
 
 # OS and editor files
 .DS_Store

@@ -6,9 +6,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
 try:
-    from .retriever import retrieve_documents
+    from .retriever import has_exact_title_match, retrieve_documents
 except ImportError:
-    from retriever import retrieve_documents
+    from retriever import has_exact_title_match, retrieve_documents
 
 
 load_dotenv()
@@ -126,7 +126,7 @@ def format_history(history: list[dict[str, str]] | None) -> str:
 
 def retrieval_query(question: str, history: list[dict[str, str]] | None) -> str:
     recent_history = trim_history(history)
-    if not recent_history:
+    if not recent_history or is_list_question(question) or has_exact_title_match(question):
         return question
 
     return (

@@ -480,6 +480,11 @@ def exact_title_matches(records: list[Document], query: str) -> list[Document]:
     return filtered_matches
 
 
+def has_exact_title_match(query: str) -> bool:
+    vectorstore = get_vectorstore()
+    return bool(exact_title_matches(get_all_records(vectorstore), query))
+
+
 def record_matches_structured_filters(document: Document, analysis: QueryAnalysis) -> bool:
     if analysis.requested_type and get_field_value(document, "type") != analysis.requested_type:
         return False
