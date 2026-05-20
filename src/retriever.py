@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
@@ -70,6 +71,28 @@ FIELD_ALIASES = {
 }
 
 
+@dataclass
+class QueryAnalysis:
+    query: str
+    title_prefix: str | None
+    title_keyword: str | None
+    requested_type: str | None
+    requested_country: str | None
+    requested_year: int | None
+    field_contains: tuple[str, str] | None
+
+    @property
+    def has_structured_filters(self) -> bool:
+        return any(
+            [
+                self.requested_type,
+                self.requested_country,
+                self.requested_year,
+                self.field_contains,
+            ]
+        )
+
+
 def get_vectorstore() -> Chroma:
     embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
     return Chroma(
@@ -79,7 +102,7 @@ def get_vectorstore() -> Chroma:
     )
 
 
-def get_retriever(k: int = 4):
+def get_retriever(k: int = 10):
     vectorstore = get_vectorstore()
     return vectorstore.as_retriever(search_kwargs={"k": k})
 
@@ -421,6 +444,112 @@ def find_metadata_filter_documents(vectorstore: Chroma, query: str, k: int) -> l
     return matches[:k]
 
 
+def analyze_query(query: str) -> QueryAnalysis:
+    return QueryAnalysis(
+        query=query,
+        title_prefix=detect_title_prefix(query),
+        title_keyword=detect_title_keyword(query),
+        requested_type=detect_requested_type(query),
+        requested_country=detect_requested_country(query),
+        requested_year=detect_requested_year(query),
+        field_contains=detect_field_contains(query),
+    )
+
+
+def exact_title_matches(records: list[Document], query: str) -> list[Document]:
+    matches = [
+        document
+        for document in records
+        if len(normalize_text(document.metadata.get("title", ""))) >= 4
+        and title_matches_query(document.metadata.get("title", ""), query)
+    ]
+    matches.sort(
+        key=lambda document: len(normalize_text(document.metadata.get("title", ""))),
+        reverse=True,
+    )
+
+    filtered_matches: list[Document] = []
+    longer_titles: list[str] = []
+    for document in matches:
+        title = normalize_text(document.metadata.get("title", ""))
+        if any(title != longer_title and title in longer_title for longer_title in longer_titles):
+            continue
+        longer_titles.append(title)
+        filtered_matches.append(document)
+
+    return filtered_matches
+
+
+def record_matches_structured_filters(document: Document, analysis: QueryAnalysis) -> bool:
+    if analysis.requested_type and get_field_value(document, "type") != analysis.requested_type:
+        return False
+    if analysis.requested_country and analysis.requested_country not in get_field_value(document, "country"):
+        return False
+    if analysis.requested_year and get_field_value(document, "year") != str(analysis.requested_year):
+        return False
+    if analysis.field_contains:
+        field, expected_value = analysis.field_contains
+        actual_value = normalize_text(get_field_value(document, field))
+        if expected_value not in actual_value:
+            return False
+    return True
+
+
+def sort_by_title_and_year(documents: list[Document]) -> list[Document]:
+    return sorted(
+        documents,
+        key=lambda document: (
+            get_field_value(document, "title"),
+            get_field_value(document, "year"),
+        ),
+    )
+
+
+def search_catalog(vectorstore: Chroma, analysis: QueryAnalysis, k: int) -> list[Document]:
+    records = get_all_records(vectorstore)
+
+    if analysis.title_prefix:
+        matches = [
+            document
+            for document in records
+            if normalize_text(document.metadata.get("title", "")).startswith(analysis.title_prefix)
+        ]
+        documents = unique_documents(sort_by_title_and_year(matches), k)
+        if documents:
+            return documents
+
+    if analysis.title_keyword:
+        matches = [
+            document
+            for document in records
+            if keyword_matches_title(analysis.title_keyword, document.metadata.get("title", ""))
+            and (
+                not analysis.requested_type
+                or document.metadata.get("type") == analysis.requested_type
+            )
+        ]
+        documents = unique_documents(sort_by_title_and_year(matches), k)
+        if documents:
+            return documents
+
+    if analysis.has_structured_filters:
+        matches = [
+            document
+            for document in records
+            if record_matches_structured_filters(document, analysis)
+        ]
+        documents = unique_documents(sort_by_title_and_year(matches), k)
+        if documents:
+            return documents
+
+    exact_matches = exact_title_matches(records, analysis.query)
+    if exact_matches:
+        return unique_documents(exact_matches, k)
+
+    vector_documents = vectorstore.as_retriever(search_kwargs={"k": k}).invoke(analysis.query)
+    return unique_documents(vector_documents, k)
+
+
 def unique_documents(documents: list[Document], k: int) -> list[Document]:
     unique: list[Document] = []
     seen_ids: set[str] = set()
@@ -437,25 +566,7 @@ def unique_documents(documents: list[Document], k: int) -> list[Document]:
     return unique
 
 
-def retrieve_documents(query: str, k: int = 4) -> list[Document]:
+def retrieve_documents(query: str, k: int = 10) -> list[Document]:
     vectorstore = get_vectorstore()
-
-    prefix_documents = unique_documents(find_title_prefix_documents(vectorstore, query, k), k)
-    if prefix_documents:
-        return prefix_documents
-
-    structured_documents = unique_documents(find_structured_filter_documents(vectorstore, query, k), k)
-    if structured_documents:
-        return structured_documents
-
-    keyword_documents = unique_documents(find_title_keyword_documents(vectorstore, query, k), k)
-    if keyword_documents:
-        return keyword_documents
-
-    exact_documents = unique_documents(find_exact_title_documents(vectorstore, query), k)
-    if exact_documents:
-        return exact_documents
-
-    filtered_documents = find_metadata_filter_documents(vectorstore, query, k)
-    vector_documents = get_retriever(k=k).invoke(query)
-    return unique_documents(filtered_documents + vector_documents, k)
+    analysis = analyze_query(query)
+    return search_catalog(vectorstore, analysis, k)

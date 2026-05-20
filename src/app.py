@@ -46,6 +46,7 @@ def explain_error(error: Exception) -> str:
 
 def main() -> None:
     print_startup_help()
+    messages: list[dict[str, str]] = []
 
     while True:
         try:
@@ -62,8 +63,10 @@ def main() -> None:
             continue
 
         try:
-            answer = ask_netflix(question)
+            answer = ask_netflix(question, history=messages)
             print(f"Assistant: {answer}\n")
+            messages.append({"role": "user", "content": question})
+            messages.append({"role": "assistant", "content": answer})
         except Exception as error:
             print(explain_error(error))
             print()

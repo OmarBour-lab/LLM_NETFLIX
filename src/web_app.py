@@ -5,7 +5,10 @@ try:
     from .chain import ask_netflix
 except ImportError:
     from app import chroma_db_is_missing, explain_error
-    from chain import ask_netflix
+from chain import ask_netflix
+
+
+MEMORY_MESSAGES = 6
 
 
 APP_TITLE = "Netflix RAG Chatbot"
@@ -300,6 +303,7 @@ def render_messages() -> None:
 
 
 def answer_question(question: str) -> None:
+    history = st.session_state.messages[-MEMORY_MESSAGES:]
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
@@ -307,7 +311,7 @@ def answer_question(question: str) -> None:
     with st.chat_message("assistant"):
         with st.spinner("Searching the local Netflix catalog..."):
             try:
-                answer = ask_netflix(question)
+                answer = ask_netflix(question, history=history)
             except Exception as error:
                 answer = explain_error(error)
         st.markdown(answer)
