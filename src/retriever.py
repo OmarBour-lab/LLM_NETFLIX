@@ -537,6 +537,10 @@ def search_catalog(vectorstore: Chroma, analysis: QueryAnalysis, k: int) -> list
         if documents:
             return documents
 
+    exact_matches = exact_title_matches(records, analysis.query)
+    if exact_matches:
+        return unique_documents(exact_matches, k)
+
     if analysis.has_structured_filters:
         matches = [
             document
@@ -546,10 +550,6 @@ def search_catalog(vectorstore: Chroma, analysis: QueryAnalysis, k: int) -> list
         documents = unique_documents(sort_by_title_and_year(matches), k)
         if documents:
             return documents
-
-    exact_matches = exact_title_matches(records, analysis.query)
-    if exact_matches:
-        return unique_documents(exact_matches, k)
 
     vector_documents = vectorstore.as_retriever(search_kwargs={"k": k}).invoke(analysis.query)
     return unique_documents(vector_documents, k)

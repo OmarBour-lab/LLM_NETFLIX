@@ -1,5 +1,6 @@
 import unicodedata
 import json
+import re
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -67,10 +68,20 @@ Rules:
 
 def is_list_question(question: str) -> bool:
     normalized_question = question.lower()
-    if "when was" in normalized_question or "when is" in normalized_question:
+    if any(
+        detail_marker in normalized_question
+        for detail_marker in [
+            "description of",
+            "description for",
+            "who directed",
+            "what do you know",
+            "when was",
+            "when is",
+        ]
+    ):
         return False
 
-    return any(
+    if any(
         marker in normalized_question
         for marker in [
             "all ",
@@ -80,8 +91,6 @@ def is_list_question(question: str) -> bool:
             "contient",
             "contenant",
             "films",
-            "film",
-            "movie",
             "movies",
             "which ",
             "what titles",
@@ -94,6 +103,15 @@ def is_list_question(question: str) -> bool:
             "réalisateur",
             "realisateur",
         ]
+    ):
+        return True
+
+    return bool(
+        re.search(
+            r"\b(?:movies|films|series|shows|tv shows?)\b\s+"
+            r"(?:from|released|with|containing|by|in|that|where|whose)\b",
+            normalized_question,
+        )
     )
 
 
@@ -209,6 +227,81 @@ def answer_title_list(documents) -> str:
     )
 
 
+def is_unknown(value: str | None) -> bool:
+    return not value or str(value).strip() == "Inconnu"
+
+
+def format_comma_values(value: str) -> str:
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    if not values:
+        return "unknown"
+    if len(values) == 1:
+        return values[0]
+    return ", ".join(values[:-1]) + f" and {values[-1]}"
+
+
+def answer_single_record(question: str, document) -> str | None:
+    fields = parse_document_fields(document.page_content)
+    title = fields.get("titre", document.metadata.get("title", "this title"))
+    title = str(title)
+    normalized_question = question.lower()
+
+    record = {
+        "type": fields.get("type", document.metadata.get("type", "Inconnu")),
+        "director": fields.get("realisateur", "Inconnu"),
+        "cast": fields.get("acteurs", "Inconnu"),
+        "country": fields.get("pays", document.metadata.get("country", "Inconnu")),
+        "year": fields.get("annee", document.metadata.get("release_year", "Inconnu")),
+        "duration": fields.get("duree", "Inconnu"),
+        "genres": fields.get("genres", document.metadata.get("listed_in", "Inconnu")),
+        "description": fields.get("description", "Inconnu"),
+    }
+
+    if "who directed" in normalized_question or re.search(r"\bdirector\b", normalized_question):
+        if is_unknown(record["director"]):
+            return f"The director of {title} is unknown in the retrieved Netflix context."
+        return f"{record['director']} directed {title}."
+
+    if any(marker in normalized_question for marker in ["who stars", "who acts", "cast", "actor", "actors"]):
+        if is_unknown(record["cast"]):
+            return f"The cast of {title} is unknown in the retrieved Netflix context."
+        return f"The cast of {title} includes {format_comma_values(record['cast'])}."
+
+    if any(marker in normalized_question for marker in ["when was", "when is", "release year", "released"]):
+        if is_unknown(str(record["year"])):
+            return f"The release year of {title} is unknown in the retrieved Netflix context."
+        return f"{title} was released in {record['year']}."
+
+    if "duration" in normalized_question or "how long" in normalized_question:
+        if is_unknown(record["duration"]):
+            return f"The duration of {title} is unknown in the retrieved Netflix context."
+        return f"The duration of {title} is {record['duration']}."
+
+    if any(marker in normalized_question for marker in ["genre", "category", "listed in"]):
+        if is_unknown(record["genres"]):
+            return f"The genres for {title} are unknown in the retrieved Netflix context."
+        return f"{title} is listed in {format_comma_values(record['genres'])}."
+
+    if any(
+        marker in normalized_question
+        for marker in ["description", "summary", "what do you know", "about"]
+    ):
+        details = []
+        if not is_unknown(record["type"]):
+            details.append(f"a {record['type']}")
+        if not is_unknown(str(record["year"])):
+            details.append(f"released in {record['year']}")
+        if not is_unknown(record["duration"]):
+            details.append(f"with a duration of {record['duration']}")
+
+        intro = f"{title} is " + " ".join(details) + "." if details else f"{title} is in the retrieved Netflix context."
+        if is_unknown(record["description"]):
+            return f"{intro} The retrieved Netflix context does not include a description."
+        return f"{intro} Its description is: {record['description']}"
+
+    return None
+
+
 def ask_netflix(question: str, history: list[dict[str, str]] | None = None) -> str:
     recent_history = trim_history(history)
     retrieval_k = LIST_RETRIEVAL_K if is_list_question(question) else DEFAULT_RETRIEVAL_K
@@ -221,6 +314,11 @@ def ask_netflix(question: str, history: list[dict[str, str]] | None = None) -> s
 
     if list_mode:
         return answer_title_list(documents)
+
+    if len(documents) == 1:
+        single_record_answer = answer_single_record(question, documents[0])
+        if single_record_answer:
+            return single_record_answer
 
     user_message = (
         f"Recent conversation, for resolving follow-up references only:\n"
