@@ -1,0 +1,38 @@
+[
+  {
+    "question": "Who directed Bird Box?",
+    "expected": "Susanne Bier",
+    "intent": "rag"
+  },
+  {
+    "question": "Give me the description of Bird Box",
+    "expected": "Bird Box",
+    "intent": "rag"
+  },
+  {
+    "question": "What do you know about Fate/Zero?",
+    "expected": "Fate/Zero",
+    "intent": "rag"
+  },
+  {
+    "question": "movies released in 2020",
+    "expected": "2020",
+    "intent": "sql"
+  },
+  {
+    "question": "series from Japan released in 2020",
+    "expected": "Japan",
+    "intent": "sql"
+  },
+  {
+    "question": "movies with director containing John",
+    "expected": "John",
+    "intent": "sql"
+  },
+  {
+    "question": "all titles that start with the legend of",
+    "expected": "the legend of",
+    "intent": "sql"
+  }
+]
+

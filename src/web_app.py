@@ -1,7 +1,7 @@
 from pathlib import Path
 
-import altair as alt
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 try:
@@ -16,7 +16,7 @@ MEMORY_MESSAGES = 6
 DATASET_PATH = Path("data/netflix_titles.csv")
 
 
-APP_TITLE = "Netflix RAG Chatbot"
+APP_TITLE = "Netflix RAG + NL2SQL Chatbot"
 APP_SUBTITLE = (
     "Ask questions against the local Netflix catalog. "
     "The app can retrieve titles, filter fields, and summarize records with a local LLM."
@@ -353,7 +353,20 @@ def render_dataset_overview() -> None:
 
     st.markdown("#### Movies vs TV Shows")
     type_counts = df["type"].value_counts().rename_axis("type").reset_index(name="count")
-    st.bar_chart(type_counts, x="type", y="count", color="#e50914")
+    type_chart = px.pie(
+        type_counts,
+        names="type",
+        values="count",
+        hole=0.35,
+        color_discrete_sequence=["#e50914", "#38bdf8"],
+    )
+    type_chart.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#f8fafc",
+        margin=dict(l=10, r=10, t=20, b=10),
+    )
+    st.plotly_chart(type_chart, use_container_width=True)
 
     left, right = st.columns(2)
     with left:
@@ -364,40 +377,80 @@ def render_dataset_overview() -> None:
             .reset_index(name="count")
             .sort_values("release_year")
         )
-        min_year = int(year_counts["release_year"].min())
-        max_year = int(year_counts["release_year"].max())
-        year_chart = (
-            alt.Chart(year_counts)
-            .mark_line(color="#e50914", strokeWidth=3)
-            .encode(
-                x=alt.X(
-                    "release_year:Q",
-                    title="Release year",
-                    scale=alt.Scale(domain=[min_year, max_year], zero=False),
-                ),
-                y=alt.Y("count:Q", title="Titles"),
-                tooltip=["release_year", "count"],
-            )
-            .properties(height=320)
+        year_chart = px.bar(
+            year_counts,
+            x="release_year",
+            y="count",
+            labels={"release_year": "Release year", "count": "Titles"},
+            color_discrete_sequence=["#e50914"],
         )
-        st.altair_chart(year_chart, use_container_width=True)
+        year_chart.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f8fafc",
+            margin=dict(l=10, r=10, t=20, b=10),
+            height=320,
+        )
+        st.plotly_chart(year_chart, use_container_width=True)
 
     with right:
         st.markdown("#### Top Ratings")
         rating_counts = df["rating"].value_counts().head(10).rename_axis("rating").reset_index(name="count")
-        st.bar_chart(rating_counts, x="rating", y="count", color="#f97316")
+        rating_chart = px.bar(
+            rating_counts,
+            x="rating",
+            y="count",
+            labels={"rating": "Rating", "count": "Titles"},
+            color_discrete_sequence=["#f97316"],
+        )
+        rating_chart.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f8fafc",
+            margin=dict(l=10, r=10, t=20, b=10),
+            height=320,
+        )
+        st.plotly_chart(rating_chart, use_container_width=True)
 
     left, right = st.columns(2)
     with left:
         st.markdown("#### Top Countries")
         country_counts = split_and_count(df, "country", top_n=10)
-        st.bar_chart(country_counts, x="country", y="count", color="#38bdf8")
+        country_chart = px.bar(
+            country_counts,
+            x="country",
+            y="count",
+            labels={"country": "Country", "count": "Titles"},
+            color_discrete_sequence=["#38bdf8"],
+        )
+        country_chart.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f8fafc",
+            margin=dict(l=10, r=10, t=20, b=10),
+            height=320,
+        )
+        st.plotly_chart(country_chart, use_container_width=True)
         st.dataframe(country_counts, use_container_width=True, hide_index=True)
 
     with right:
         st.markdown("#### Top Genres")
         genre_counts = split_and_count(df, "listed_in", top_n=10)
-        st.bar_chart(genre_counts, x="listed_in", y="count", color="#22c55e")
+        genre_chart = px.bar(
+            genre_counts,
+            x="listed_in",
+            y="count",
+            labels={"listed_in": "Genre", "count": "Titles"},
+            color_discrete_sequence=["#22c55e"],
+        )
+        genre_chart.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#f8fafc",
+            margin=dict(l=10, r=10, t=20, b=10),
+            height=320,
+        )
+        st.plotly_chart(genre_chart, use_container_width=True)
         st.dataframe(genre_counts, use_container_width=True, hide_index=True)
 
     st.markdown("#### Sample Catalog Rows")

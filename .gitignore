@@ -11,6 +11,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 build/
 dist/
 *.egg-info/
@@ -22,15 +24,25 @@ dist/
 # Generated vector database
 chroma_db/
 
+# Generated evaluation / BI exports
+exports/
+
 # Streamlit and runtime logs
 .streamlit/
 streamlit-*.log
 *.log
 
 # Project instructions / local notes not needed in the repo
+.agents/
 AGENTS.md
 commades utile.txt
 review.txt
+
+# Frontend local installs/build outputs
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
 # OS and editor files
 .DS_Store

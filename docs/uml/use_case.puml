@@ -1,0 +1,24 @@
+@startuml
+left to right direction
+actor "End User" as User
+actor "Developer / Maintainer" as Dev
+
+rectangle "Netflix RAG + NL2SQL Platform" {
+  usecase "Ask catalog question" as Ask
+  usecase "Search by filters" as Filter
+  usecase "Ask for title details" as Details
+  usecase "View dataset dashboard" as Dashboard
+  usecase "Submit feedback" as Feedback
+  usecase "Load CSV into ChromaDB" as Chroma
+  usecase "Load CSV into PostgreSQL" as Postgres
+}
+
+User --> Ask
+User --> Filter
+User --> Details
+User --> Dashboard
+User --> Feedback
+Dev --> Chroma
+Dev --> Postgres
+@enduml
+

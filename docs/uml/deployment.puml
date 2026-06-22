@@ -1,0 +1,19 @@
+@startuml
+node "Local Machine" {
+  component "Streamlit UI\n:8501" as Streamlit
+  component "FastAPI\n:8000" as API
+  component "Ollama\n:11434" as Ollama
+  database "ChromaDB\n./chroma_db" as Chroma
+}
+
+node "Docker Compose" {
+  database "PostgreSQL\n:5432" as PostgreSQL
+}
+
+Streamlit --> Ollama
+Streamlit --> Chroma
+API --> Ollama
+API --> Chroma
+API --> PostgreSQL
+@enduml
+

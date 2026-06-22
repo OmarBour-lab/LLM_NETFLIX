@@ -1,0 +1,29 @@
+@startuml
+skinparam componentStyle rectangle
+
+component "Streamlit UI" as Streamlit
+component "FastAPI Backend" as API
+component "CLI" as CLI
+component "Conversation Chain" as Chain
+component "Intent Router" as Router
+component "RAG Retriever" as Retriever
+component "NL2SQL Module" as NL2SQL
+database "ChromaDB" as Chroma
+database "PostgreSQL" as PostgreSQL
+component "Ollama\nllama3.2:1b\nnomic-embed-text" as Ollama
+file "netflix_titles.csv" as CSV
+
+Streamlit --> Chain
+CLI --> Chain
+API --> Chain
+Chain --> Router
+Chain --> Retriever
+Chain --> NL2SQL
+Retriever --> Chroma
+NL2SQL --> PostgreSQL
+Retriever --> Ollama
+Chain --> Ollama
+CSV --> Chroma
+CSV --> PostgreSQL
+@enduml
+

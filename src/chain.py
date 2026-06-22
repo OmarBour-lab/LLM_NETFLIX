@@ -7,15 +7,19 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
 try:
+    from .config import LLM_MODEL, OLLAMA_BASE_URL
+    from .nl2sql import query_catalog
     from .retriever import has_exact_title_match, retrieve_documents
+    from .router import classify_intent
 except ImportError:
+    from config import LLM_MODEL, OLLAMA_BASE_URL
+    from nl2sql import query_catalog
     from retriever import has_exact_title_match, retrieve_documents
+    from router import classify_intent
 
 
 load_dotenv()
 
-LLM_MODEL = "llama3.2:1b"
-OLLAMA_BASE_URL = "http://localhost:11434"
 FALLBACK_MESSAGE = "I cannot confirm that with the retrieved Netflix context."
 DEFAULT_RETRIEVAL_K = 10
 LIST_RETRIEVAL_K = 10000
@@ -62,6 +66,7 @@ Rules:
 - Do not use outside knowledge.
 - Do not mention websites or external services.
 - Do not add extra notes about unrelated or missing rows.
+- Do not mention record counts, row counts, or prompt metadata.
 - If the retrieved rows do not contain the answer, say that the retrieved rows do not contain enough information.
 {required_instruction}"""
 
@@ -155,6 +160,46 @@ def retrieval_query(question: str, history: list[dict[str, str]] | None) -> str:
     )
 
 
+def infer_last_discussed_title(history: list[dict[str, str]] | None) -> str | None:
+    if not history:
+        return None
+
+    patterns = [
+        r"^(.+?) is a (?:Movie|TV Show) released",
+        r"^(.+?) is in the retrieved Netflix context",
+        r"^(.+?) was released in",
+        r"^The duration of (.+?) is",
+        r"^The cast of (.+?) includes",
+        r"^(.+?) directed (.+?)\.",
+        r"^The director of (.+?) is",
+    ]
+
+    for message in reversed(history):
+        content = message.get("content", "").strip()
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if not match:
+                continue
+            if pattern.startswith("^(.+?) directed"):
+                return match.group(2).strip()
+            return match.group(1).strip()
+    return None
+
+
+def resolve_follow_up_question(question: str, history: list[dict[str, str]] | None) -> str:
+    if not re.search(r"\b(it|this title|that title)\b", question.lower()):
+        return question
+
+    title = infer_last_discussed_title(history)
+    if not title:
+        return question
+
+    resolved = re.sub(r"\bthis title\b", title, question, flags=re.IGNORECASE)
+    resolved = re.sub(r"\bthat title\b", title, resolved, flags=re.IGNORECASE)
+    resolved = re.sub(r"\bit\b", title, resolved, flags=re.IGNORECASE)
+    return resolved
+
+
 def normalize_key(key: str) -> str:
     normalized = unicodedata.normalize("NFKD", key.strip().lower())
     return "".join(char for char in normalized if not unicodedata.combining(char))
@@ -225,6 +270,70 @@ def answer_title_list(documents) -> str:
         + ", ".join(titles[:-1])
         + f" and {titles[-1]}."
     )
+
+
+def answer_sql_rows(question: str, rows: list[dict]) -> str | None:
+    if not rows:
+        return FALLBACK_MESSAGE
+
+    normalized_question = question.lower()
+    if len(rows) == 1:
+        row = rows[0]
+        title = row.get("title", "this title")
+        if "who directed" in normalized_question or "director" in normalized_question:
+            director = row.get("director") or "unknown"
+            return f"{director} directed {title}."
+        if any(marker in normalized_question for marker in ["description", "summary", "what do you know", "about"]):
+            description = row.get("description") or "no description is available"
+            year = row.get("release_year")
+            title_type = row.get("type")
+            details = []
+            if title_type:
+                details.append(f"a {title_type}")
+            if year:
+                details.append(f"released in {year}")
+            intro = f"{title} is " + " ".join(details) + "." if details else f"{title} is in the catalog."
+            return f"{intro} Its description is: {description}"
+        if "cast" in normalized_question or "actor" in normalized_question:
+            cast = row.get("cast") or "unknown"
+            return f"The cast of {title} includes {cast}."
+        if "released" in normalized_question or "year" in normalized_question:
+            year = row.get("release_year") or "unknown"
+            return f"{title} was released in {year}."
+
+    titles = []
+    seen = set()
+    for row in rows:
+        title = row.get("title")
+        if title and title not in seen:
+            seen.add(title)
+            titles.append(title)
+
+    if not titles:
+        return FALLBACK_MESSAGE
+    if len(titles) == 1:
+        return f"The relevant title found in the PostgreSQL catalog is {titles[0]}."
+    return (
+        "The relevant titles found in the PostgreSQL catalog are "
+        + ", ".join(titles[:-1])
+        + f" and {titles[-1]}."
+    )
+
+
+def try_sql_answer(question: str) -> str | None:
+    if re.search(r"\b(does not exist|do not exist|not exist|nonexistent)\b", question.lower()):
+        return FALLBACK_MESSAGE
+
+    route = classify_intent(question)
+    if route.intent not in {"sql", "mixed"}:
+        return None
+
+    result = query_catalog(question)
+    if result.error:
+        return None
+    if not result.rows:
+        return None
+    return answer_sql_rows(question, result.rows)
 
 
 def is_unknown(value: str | None) -> bool:
@@ -304,9 +413,14 @@ def answer_single_record(question: str, document) -> str | None:
 
 def ask_netflix(question: str, history: list[dict[str, str]] | None = None) -> str:
     recent_history = trim_history(history)
-    retrieval_k = LIST_RETRIEVAL_K if is_list_question(question) else DEFAULT_RETRIEVAL_K
-    documents = retrieve_documents(retrieval_query(question, recent_history), k=retrieval_k)
-    list_mode = is_list_question(question)
+    effective_question = resolve_follow_up_question(question, recent_history)
+    sql_answer = try_sql_answer(effective_question)
+    if sql_answer:
+        return sql_answer
+
+    retrieval_k = LIST_RETRIEVAL_K if is_list_question(effective_question) else DEFAULT_RETRIEVAL_K
+    documents = retrieve_documents(retrieval_query(effective_question, recent_history), k=retrieval_k)
+    list_mode = is_list_question(effective_question)
     context = format_title_list(documents) if list_mode else format_documents(documents)
 
     if not context:
@@ -316,15 +430,14 @@ def ask_netflix(question: str, history: list[dict[str, str]] | None = None) -> s
         return answer_title_list(documents)
 
     if len(documents) == 1:
-        single_record_answer = answer_single_record(question, documents[0])
+        single_record_answer = answer_single_record(effective_question, documents[0])
         if single_record_answer:
             return single_record_answer
 
     user_message = (
         f"Recent conversation, for resolving follow-up references only:\n"
         f"{format_history(recent_history)}\n\n"
-        f"Question:\n{question}\n\n"
-        f"Number of retrieved rows: {len(documents)}\n\n"
+        f"Question:\n{effective_question}\n\n"
         f"Retrieved database rows:\n{context}\n\n"
         "If there is one row, it is the matching row. "
         "Answer using only the retrieved database rows."
@@ -338,7 +451,7 @@ def ask_netflix(question: str, history: list[dict[str, str]] | None = None) -> s
     )
     response = llm.invoke(
         [
-            SystemMessage(content=system_prompt_for(question, documents)),
+            SystemMessage(content=system_prompt_for(effective_question, documents)),
             HumanMessage(content=user_message),
         ]
     )

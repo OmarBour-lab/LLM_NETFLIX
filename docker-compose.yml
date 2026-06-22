@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: netflix_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  fastapi:
+    build: .
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://user:password@postgres:5432/netflix_db
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    ports:
+      - "8000:8000"
+    command: uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
+
+  streamlit:
+    build: .
+    depends_on:
+      - fastapi
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    command: streamlit run src/web_app.py --server.address 0.0.0.0 --server.port 8501
+
+volumes:
+  pgdata:
+

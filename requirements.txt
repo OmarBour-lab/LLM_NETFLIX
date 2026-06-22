@@ -5,3 +5,15 @@ chromadb
 pandas
 python-dotenv
 streamlit
+sqlalchemy
+asyncpg
+psycopg2-binary
+fastapi
+uvicorn
+pydantic-settings
+python-jose[cryptography]
+websockets
+plotly
+scikit-learn
+pytest
+httpx

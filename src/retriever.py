@@ -7,6 +7,11 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 
+try:
+    from .nl2sql import query_catalog
+except ImportError:
+    from nl2sql import query_catalog
+
 
 load_dotenv()
 
@@ -55,6 +60,9 @@ QUERY_FILLER_WORDS = {
     "shows",
     "that",
     "the",
+    "their",
+    "title",
+    "titre",
     "titles",
     "with",
 }
@@ -100,11 +108,6 @@ def get_vectorstore() -> Chroma:
         persist_directory=PERSIST_DIRECTORY,
         embedding_function=embeddings,
     )
-
-
-def get_retriever(k: int = 10):
-    vectorstore = get_vectorstore()
-    return vectorstore.as_retriever(search_kwargs={"k": k})
 
 
 def normalize_text(text: str) -> str:
@@ -170,28 +173,6 @@ def get_all_records(vectorstore: Chroma) -> list[Document]:
     return documents_from_rows(rows)
 
 
-def find_exact_title_documents(vectorstore: Chroma, query: str) -> list[Document]:
-    records = get_all_records(vectorstore)
-    matches = [
-        document
-        for document in records
-        if len(normalize_text(document.metadata.get("title", ""))) >= 4
-        and title_matches_query(document.metadata.get("title", ""), query)
-    ]
-    matches.sort(key=lambda document: len(normalize_text(document.metadata.get("title", ""))), reverse=True)
-
-    filtered_matches: list[Document] = []
-    longer_titles: list[str] = []
-    for document in matches:
-        title = normalize_text(document.metadata.get("title", ""))
-        if any(title != longer_title and title in longer_title for longer_title in longer_titles):
-            continue
-        longer_titles.append(title)
-        filtered_matches.append(document)
-
-    return filtered_matches
-
-
 def detect_title_prefix(query: str) -> str | None:
     normalized_query = normalize_text(query)
     patterns = [
@@ -210,20 +191,6 @@ def detect_title_prefix(query: str) -> str | None:
             return re.sub(r"\b(movie|movies|series|shows|available|catalogue|catalog)\b", "", phrase).strip()
 
     return None
-
-
-def find_title_prefix_documents(vectorstore: Chroma, query: str, k: int) -> list[Document]:
-    prefix = detect_title_prefix(query)
-    if not prefix:
-        return []
-
-    matches = [
-        document
-        for document in get_all_records(vectorstore)
-        if normalize_text(document.metadata.get("title", "")).startswith(prefix)
-    ]
-    matches.sort(key=lambda document: document.metadata.get("title", ""))
-    return matches[:k]
 
 
 def detect_title_keyword(query: str) -> str | None:
@@ -266,25 +233,13 @@ def clean_keyword(keyword: str) -> str:
     return " ".join(words).strip()
 
 
-def find_title_keyword_documents(vectorstore: Chroma, query: str, k: int) -> list[Document]:
-    keyword = detect_title_keyword(query)
-    if not keyword:
-        return []
-
-    requested_type = detect_requested_type(query)
-    matches = [
-        document
-        for document in get_all_records(vectorstore)
-        if keyword_matches_title(keyword, document.metadata.get("title", ""))
-        and (not requested_type or document.metadata.get("type") == requested_type)
-    ]
-    matches.sort(
-        key=lambda document: (
-            document.metadata.get("title", ""),
-            int(document.metadata.get("release_year", 0)),
-        )
-    )
-    return matches[:k]
+def clean_field_keyword(keyword: str, query: str) -> str:
+    requested_year = detect_requested_year(query)
+    ignored_words = {"released", "release", "year", "annee", "sorti", "sortie"}
+    if requested_year:
+        ignored_words.add(str(requested_year))
+    words = [word for word in clean_keyword(keyword).split() if word not in ignored_words]
+    return " ".join(words).strip()
 
 
 def keyword_matches_title(keyword: str, title: str) -> bool:
@@ -369,7 +324,7 @@ def detect_field_contains(query: str) -> tuple[str, str] | None:
         normalized_query,
     )
     if field_contains_match:
-        value = clean_keyword(field_contains_match.group(1))
+        value = clean_field_keyword(field_contains_match.group(1), query)
         if value:
             return detected_field, value
 
@@ -378,70 +333,11 @@ def detect_field_contains(query: str) -> tuple[str, str] | None:
         normalized_query,
     )
     if contains_match:
-        value = clean_keyword(contains_match.group(1))
+        value = clean_field_keyword(contains_match.group(1), query)
         if value:
             return detected_field, value
 
     return None
-
-
-def find_structured_filter_documents(vectorstore: Chroma, query: str, k: int) -> list[Document]:
-    requested_type = detect_requested_type(query)
-    requested_country = detect_requested_country(query)
-    requested_year = detect_requested_year(query)
-    field_contains = detect_field_contains(query)
-
-    if not any([requested_type, requested_country, requested_year, field_contains]):
-        return []
-
-    matches: list[Document] = []
-    for document in get_all_records(vectorstore):
-        if requested_type and get_field_value(document, "type") != requested_type:
-            continue
-        if requested_country and requested_country not in get_field_value(document, "country"):
-            continue
-        if requested_year and get_field_value(document, "year") != str(requested_year):
-            continue
-        if field_contains:
-            field, expected_value = field_contains
-            actual_value = normalize_text(get_field_value(document, field))
-            if expected_value not in actual_value:
-                continue
-        matches.append(document)
-
-    matches.sort(
-        key=lambda document: (
-            get_field_value(document, "title"),
-            get_field_value(document, "year"),
-        )
-    )
-    return matches[:k]
-
-
-def find_metadata_filter_documents(vectorstore: Chroma, query: str, k: int) -> list[Document]:
-    requested_type = detect_requested_type(query)
-    requested_country = detect_requested_country(query)
-
-    if not requested_type and not requested_country:
-        return []
-
-    matches: list[Document] = []
-    for document in get_all_records(vectorstore):
-        metadata = document.metadata
-        if requested_type and metadata.get("type") != requested_type:
-            continue
-        if requested_country and requested_country not in metadata.get("country", ""):
-            continue
-        matches.append(document)
-
-    matches.sort(
-        key=lambda document: (
-            int(document.metadata.get("release_year", 0)),
-            document.metadata.get("title", ""),
-        ),
-        reverse=True,
-    )
-    return matches[:k]
 
 
 def analyze_query(query: str) -> QueryAnalysis:
@@ -548,8 +444,7 @@ def search_catalog(vectorstore: Chroma, analysis: QueryAnalysis, k: int) -> list
             if record_matches_structured_filters(document, analysis)
         ]
         documents = unique_documents(sort_by_title_and_year(matches), k)
-        if documents:
-            return documents
+        return documents
 
     vector_documents = vectorstore.as_retriever(search_kwargs={"k": k}).invoke(analysis.query)
     return unique_documents(vector_documents, k)
@@ -575,3 +470,35 @@ def retrieve_documents(query: str, k: int = 10) -> list[Document]:
     vectorstore = get_vectorstore()
     analysis = analyze_query(query)
     return search_catalog(vectorstore, analysis, k)
+
+
+def sql_rows_to_documents(rows: list[dict]) -> list[Document]:
+    documents = []
+    for row in rows:
+        page_content = f"""Titre: {row.get("title", "")}
+Type: {row.get("type", "")}
+RÃ©alisateur: {row.get("director", "")}
+Acteurs: {row.get("cast", "")}
+Pays: {row.get("country", "")}
+AnnÃ©e: {row.get("release_year", "")}
+DurÃ©e: {row.get("duration", "")}
+Genres: {row.get("listed_in", "")}
+Description: {row.get("description", "")}"""
+        metadata = {
+            "show_id": row.get("show_id"),
+            "title": row.get("title"),
+            "type": row.get("type"),
+            "release_year": row.get("release_year"),
+            "country": row.get("country"),
+            "listed_in": row.get("listed_in"),
+            "rating": row.get("rating"),
+        }
+        documents.append(Document(page_content=page_content, metadata=metadata))
+    return documents
+
+
+def retrieve_sql_documents(query: str, k: int | None = None) -> list[Document]:
+    result = query_catalog(query, limit=k)
+    if result.error:
+        return []
+    return sql_rows_to_documents(result.rows)

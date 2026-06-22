@@ -1,179 +1,174 @@
-Fonctionnement du projet Netflix RAG Chatbot
-===========================================
+Fonctionnement du projet LLM_NETFLIX
+====================================
 
 1. Objectif
 -----------
-Ce projet construit un chatbot local capable de répondre à des questions sur le
-catalogue Netflix contenu dans le fichier data/netflix_titles.csv.
+LLM_NETFLIX est une plateforme locale de question-reponse sur le catalogue
+Netflix contenu dans `data/netflix_titles.csv`.
 
-Le projet utilise une architecture RAG, c'est-à-dire Retrieval-Augmented
-Generation. Le modèle ne connaît pas directement toute la base Netflix. Il reçoit
-seulement les documents les plus pertinents récupérés depuis une base vectorielle
-locale.
+Le projet combine deux approches :
+
+1. RAG avec ChromaDB pour les questions descriptives ou semantiques.
+2. NL2SQL avec PostgreSQL pour les recherches structurees et les listes.
+
+Le chatbot, la CLI, l'API et l'interface Streamlit repondent en anglais.
 
 
-2. Technologies utilisées
+2. Technologies utilisees
 -------------------------
-- Python avec un environnement uv
-- LangChain pour organiser la chaîne RAG
-- Ollama comme fournisseur local de modèles
-- llama3.2:1b comme modèle de langage
-- nomic-embed-text comme modèle d'embeddings
-- ChromaDB comme base vectorielle persistante
+- Python et uv
+- LangChain
+- Ollama avec `llama3.2:1b`
+- Ollama embeddings avec `nomic-embed-text`
+- ChromaDB persistant dans `chroma_db/`
+- PostgreSQL avec la base `netflix_db`
+- SQLAlchemy pour charger et interroger PostgreSQL
+- FastAPI pour le backend
+- JWT avec `python-jose`
+- WebSocket pour une diffusion simplifiee des reponses
 - Streamlit pour l'interface web
-- pandas pour lire le fichier CSV
+- Plotly pour les visualisations
+- Scikit-learn pour le baseline de routage experimental
+- pytest et httpx pour les tests
+- Dockerfile et docker-compose pour le deploiement
 
 
-3. Données
+3. Donnees
 ----------
-Le dataset utilisé est :
+Le dataset est :
 
 data/netflix_titles.csv
 
-Ce fichier contient 8 807 titres Netflix. Il ne doit jamais être modifié.
+Il contient 8 807 titres Netflix. Le fichier CSV ne doit jamais etre modifie.
 
-Chaque ligne du CSV correspond à un film ou une série TV avec des champs comme :
-title, type, director, cast, country, release_year, rating, duration, listed_in,
-description.
-
-
-4. Ingestion des données
-------------------------
-Le fichier src/ingest.py sert à préparer la base ChromaDB.
-
-Son rôle :
-1. Vérifier que data/netflix_titles.csv existe.
-2. Lire le CSV avec pandas.
-3. Remplacer les valeurs manquantes uniquement dans les colonnes :
-   director, cast, country, date_added.
-4. Construire un document texte par titre Netflix.
-5. Générer les embeddings avec nomic-embed-text via Ollama.
-6. Stocker les documents dans ChromaDB dans le dossier chroma_db/.
-
-La collection ChromaDB utilisée s'appelle :
-
-netflix_catalog
-
-Le script vérifie aussi si la collection contient déjà des documents. Si oui,
-il arrête l'ingestion pour éviter les doublons.
+Colonnes principales :
+- show_id
+- type
+- title
+- director
+- cast
+- country
+- date_added
+- release_year
+- rating
+- duration
+- listed_in
+- description
 
 
-5. Recherche des documents
---------------------------
-Le fichier src/retriever.py contient la logique de récupération.
+4. Ingestion ChromaDB
+---------------------
+Le fichier `src/ingest.py` prepare la base vectorielle ChromaDB.
 
-Il utilise deux approches :
-
-1. Recherche vectorielle classique
-   La question est transformée en embedding, puis ChromaDB récupère les documents
-   les plus proches.
-
-2. Filtres structurés
-   Pour certaines questions, une recherche exacte est plus fiable que la recherche
-   vectorielle. Le projet filtre donc directement les documents selon leurs champs.
-
-Exemples :
-- titres contenant un mot : "list movies containing love"
-- titres qui commencent par une phrase : "all titles that start with the legend of"
-- réalisateur contenant un mot : "movies with director containing John"
-- acteur contenant un mot : "movies with cast containing Sandra"
-- année de sortie : "movies released in 2020"
-- pays : "series from Japan released in 2020"
-- type : Movie ou TV Show
-
-Cette partie est importante, car le modèle llama3.2:1b est léger et peut oublier
-des éléments dans les longues listes. Les questions de liste sont donc extraites
-directement depuis les documents filtrés.
-
-
-6. Chaîne RAG
--------------
-Le fichier src/chain.py contient la chaîne principale de question-réponse.
-
-Son rôle :
-1. Recevoir une question utilisateur.
-2. Appeler le retriever pour récupérer les documents utiles.
-3. Formater le contexte récupéré.
-4. Envoyer le contexte au modèle llama3.2:1b via Ollama.
-5. Retourner la réponse finale.
-
-Pour les questions de description ou de résumé, le modèle local génère la réponse
-à partir du contexte récupéré.
-
-Pour les questions de liste, la réponse est extraite directement à partir des
-documents filtrés, afin d'éviter que le petit modèle oublie des titres.
-
-
-7. Interface CLI
-----------------
-Le fichier src/app.py fournit une interface en ligne de commande.
+Etapes :
+1. Lire `data/netflix_titles.csv`.
+2. Remplacer les valeurs manquantes uniquement dans `director`, `cast`,
+   `country` et `date_added` par `Inconnu`.
+3. Construire un document texte par titre avec le template impose.
+4. Generer les embeddings avec `nomic-embed-text` via Ollama.
+5. Stocker les documents dans `chroma_db/`, collection `netflix_catalog`.
 
 Commande :
-
-uv run python src/app.py
-
-L'utilisateur peut poser une question, puis quitter avec :
-
-/quit
-
-L'interface gère aussi quelques erreurs simples :
-- ChromaDB manquante
-- Ollama non lancé
-- modèles Ollama non téléchargés
-
-
-8. Interface web
-----------------
-Le fichier src/web_app.py fournit une interface Streamlit.
-
-Commande :
-
-uv run streamlit run src/web_app.py
-
-L'interface web est en anglais, car le modèle llama3.2:1b répond mieux aux
-questions en anglais.
-
-Elle propose des exemples de questions pour montrer les capacités du projet :
-- Give me the description of League of Legends Origins
-- all pokemon movies or series that are available
-- all titles that start with the legend of
-- movies with director containing John
-- movies with cast containing Sandra
-- movies released in 2020
-- series from Japan released in 2020
-- list movies containing love
-
-
-9. Commandes principales
-------------------------
-Installer les dépendances :
-
-uv pip install -r requirements.txt
-
-Télécharger les modèles Ollama :
-
-ollama pull llama3.2:1b
-ollama pull nomic-embed-text
-
-Créer la base vectorielle :
 
 uv run python src/ingest.py
 
-Lancer le chatbot CLI :
+
+5. Chargement PostgreSQL
+------------------------
+Le fichier `src/load_postgres.py` charge le CSV dans PostgreSQL.
+
+La base utilisee est `netflix_db` et la table est `netflix_titles`.
+Le projet utilise `DATABASE_URL` depuis `.env`.
+
+Commande :
+
+uv run python src/load_postgres.py
+
+
+6. Routage RAG + NL2SQL
+-----------------------
+Le fichier `src/router.py` classe les questions en intentions :
+- rag
+- sql
+- mixed
+- visualization
+
+Le fichier `src/nl2sql.py` transforme les questions structurees en requetes SQL
+securisees. Il autorise uniquement les requetes SELECT et bloque les operations
+dangereuses comme DROP, DELETE, UPDATE, INSERT, ALTER ou TRUNCATE.
+
+Le fichier `src/retriever.py` garde le fallback ChromaDB/Python, notamment pour
+les cas ou PostgreSQL ne trouve pas de resultat a cause d'accents ou de variantes
+textuelles.
+
+
+7. Chaine de reponse
+--------------------
+Le fichier `src/chain.py` orchestre le pipeline :
+1. Nettoyage et resolution simple des questions de suivi.
+2. Tentative NL2SQL si la question est structuree.
+3. Fallback RAG/ChromaDB si necessaire.
+4. Reponse finale en anglais, en langage naturel.
+
+Le prompt systeme impose :
+- repondre en anglais ;
+- ne jamais retourner de CSV, JSON, tableau Markdown ou liste brute ;
+- mentionner tous les titres pertinents trouves dans le contexte.
+
+
+8. Interfaces
+-------------
+CLI :
 
 uv run python src/app.py
 
-Lancer l'interface web :
+Streamlit :
 
 uv run streamlit run src/web_app.py
+
+FastAPI :
+
+uv run uvicorn src.backend.main:app --reload
+
+Endpoints principaux :
+- GET /health
+- POST /token
+- POST /chat
+- GET /history
+- POST /feedback
+- GET /stats
+- WS /ws/{session_id}
+
+
+9. Evaluation et tests
+----------------------
+Tests automatises :
+
+uv run pytest tests/ -v
+
+Validation manuelle realisee :
+- 50 prompts varies testes
+- 50 reussites
+- 0 echec
+
+La suite pytest actuelle passe avec 20 tests.
+
+Le script `evaluation/evaluate.py` exporte :
+- exports/evaluation_results.csv
+- exports/netflix_stats.csv
+
+Ces fichiers peuvent etre ouverts dans Power BI.
 
 
 10. Limites connues
 -------------------
-- Le modèle llama3.2:1b est léger. Il peut parfois mal raisonner ou oublier des
-  éléments dans une longue liste.
-- Pour cette raison, les listes sont filtrées côté Python à partir de la base.
-- Le modèle n'est pas entraîné sur le CSV. Il lit seulement le contexte récupéré.
-- La qualité dépend de la récupération des bons documents.
-- Le projet reste entièrement local : aucune API externe n'est utilisée.
+- `llama3.2:1b` est leger et peut etre moins fiable sur des questions tres
+  ambigues.
+- Les grandes listes produisent volontairement des reponses longues, car le
+  systeme doit mentionner tous les titres pertinents.
+- React.js est documente comme perspective dans `frontend/README.md`, mais pas
+  implemente comme application complete.
+- Le WebSocket diffuse la reponse apres generation ; ce n'est pas encore un vrai
+  streaming natif token par token depuis Ollama.
+- Ollama doit etre lance localement avant d'utiliser les fonctions RAG.
 

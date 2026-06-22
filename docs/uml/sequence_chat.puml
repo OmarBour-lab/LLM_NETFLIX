@@ -1,0 +1,30 @@
+@startuml
+actor User
+participant "Streamlit / FastAPI" as UI
+participant "chain.py" as Chain
+participant "router.py" as Router
+participant "nl2sql.py" as NL2SQL
+participant "retriever.py" as Retriever
+database "PostgreSQL" as SQL
+database "ChromaDB" as Chroma
+participant "Ollama" as Ollama
+
+User -> UI: Ask question
+UI -> Chain: ask_netflix(question, history)
+Chain -> Router: classify_intent(question)
+alt structured question
+  Chain -> NL2SQL: query_catalog(question)
+  NL2SQL -> SQL: SELECT safe query
+  SQL --> NL2SQL: rows
+  NL2SQL --> Chain: rows
+else semantic question or SQL fallback
+  Chain -> Retriever: retrieve_documents(question)
+  Retriever -> Chroma: similarity search / filters
+  Chroma --> Retriever: documents
+  Chain -> Ollama: prompt + context
+  Ollama --> Chain: answer
+end
+Chain --> UI: English natural language answer
+UI --> User: Display answer
+@enduml
+

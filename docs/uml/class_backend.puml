@@ -1,0 +1,39 @@
+@startuml
+class ChatRequest {
+  question: str
+  session_id: str
+  history: list[Message]
+}
+
+class ChatResponse {
+  answer: str
+  session_id: str
+  latency_ms: float
+  sources: list[str]
+}
+
+class Message {
+  role: str
+  content: str
+}
+
+class FeedbackRequest {
+  session_id: str
+  question: str
+  answer: str
+  rating: int
+  comment: str
+}
+
+class SQLQueryResult {
+  sql: str
+  params: dict
+  rows: list[dict]
+  latency_ms: float
+  error: str
+}
+
+ChatRequest "1" o-- "*" Message
+ChatResponse "1" o-- "*" Message
+@enduml
+
